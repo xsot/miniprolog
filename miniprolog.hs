@@ -7,7 +7,6 @@ import Data.Maybe
 import Text.Parsec
 import Text.ParserCombinators.Parsec.Combinator
 import Text.ParserCombinators.Parsec.Char
-import Control.Monad.State
 
 type Parser = Parsec String ()
 
@@ -147,36 +146,48 @@ simplify xs = filter (\x -> length x > 1) merged
                 _            -> return $ (fst <$> l) ++ [val]
 
 main = do
-    path:_ <- getArgs
-    source <- readFile path
-    let database = parse program "" source
-    case database of
-      Left err -> putStrLn $ show err
-      Right db -> do
-          putStrLn "Imported rules:"
-          mapM_ (putStrLn . show) db
-          repl db
+    args <- getArgs
+    if args == []
+        then putStrLn "Usage: ./miniprolog <source file>"
+        else do
+            source <- readFile $ head args
+            case parse program "" source of
+                Left err ->
+                    putStrLn $ show err
+                Right db -> do
+                    putStrLn "Imported rules:"
+                    mapM_ (putStrLn . show) db
+                    repl db
 
 repl :: Program -> IO ()
 repl database = do
     putStr' "?- "
     line <- getLine
-    let Right (Rule query []) = parse rule "" line
-    let subs = solve [query] database 1
-    hSetBuffering stdin NoBuffering
-    eval subs
-    hSetBuffering stdin LineBuffering
+    case parse rule "" line of
+        Left err ->
+            putStrLn $ show err
+        Right (Rule query []) -> do
+            let subs = solve [query] database 1
+            hSetBuffering stdin NoBuffering
+            eval subs False
+            hSetBuffering stdin LineBuffering
     repl database
 
-eval :: [Substitutions] -> IO ()
-eval [] = putStrLn "false."
-eval (x@(Just s):xs) = do
+eval :: [Substitutions] -> Bool -> IO ()
+eval [] _ = putStrLn "false."
+eval (x@(Just s):xs) strict = do
     let solution = simplify [(v, getAssignment x v) | (v@(Variable _ 0), _) <- s]
-    if solution == [] then putStr' "true"
-                      else putStr' $ intercalate ", " $ (\l -> intercalate "=" (show <$> l)) <$> solution
-    if xs == [] then putStrLn "."
-                else do action <- getChar
-                        if action == ';' then putStrLn "" >> eval xs
-                                         else return ()
+    if solution == []
+        then putStr' "true"
+        else putStr' $ intercalate ", " $ (\l -> intercalate "=" (show <$> l)) <$> solution
+    if xs == []
+        then putStrLn "."
+        else if strict
+                 then eval xs strict
+                 else do action <- getChar
+                         case action of
+                           ';' -> putStrLn "" >> eval xs strict
+                           '!' -> putStrLn "" >> eval xs True
+                           _   -> return ()
 
 putStr' x = putStr x >> hFlush stdout
